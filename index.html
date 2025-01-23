@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>다크 테마 테트리스</title>
+    <style>
+        body {
+            background-color: #1a1a1a;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin: 0;
+            padding: 20px;
+            color: #ffffff;
+            font-family: Arial, sans-serif;
+        }
+
+        #game-container {
+            display: flex;
+            gap: 20px;
+        }
+
+        #game-board {
+            border: 2px solid #444;
+            background-color: #222;
+        }
+
+        #score-board {
+            padding: 20px;
+            background-color: #222;
+            border: 2px solid #444;
+            border-radius: 5px;
+        }
+
+        .game-over {
+            position: absolute;
+            background-color: rgba(0, 0, 0, 0.8);
+            color: red;
+            font-size: 24px;
+            padding: 20px;
+            border-radius: 10px;
+            display: none;
+        }
+
+        @keyframes flash {
+            0% { opacity: 1; }
+            50% { opacity: 0.3; }
+            100% { opacity: 1; }
+        }
+
+        .flash-line {
+            animation: flash 0.3s linear 3;
+        }
+    </style>
+</head>
+<body>
+    <h1>테트리스</h1>
+    <div id="game-container">
+        <div>
+            <canvas id="game-board" width="300" height="600"></canvas>
+            <div class="game-over" id="game-over">게임 오버!</div>
+        </div>
+        <div id="score-board">
+            <h2>점수: <span id="score">0</span></h2>
+            <h3>레벨: <span id="level">1</span></h3>
+            <button onclick="startGame()" style="padding: 10px; background-color: #444; color: white; border: none; border-radius: 5px; cursor: pointer;">게임 시작</button>
+        </div>
+    </div>
+
+    <!-- 오디오 요소 추가 -->
+    <audio id="clearSound" src="https://assets.mixkit.co/active_storage/sfx/2005/2005-preview.mp3"></audio>
+    <audio id="gameOverSound" src="https://assets.mixkit.co/active_storage/sfx/1435/1435-preview.mp3"></audio>
+
+    <script>
+        const canvas = document.getElementById('game-board');
+        const ctx = canvas.getContext('2d');
+        const BLOCK_SIZE = 30;
+        const BOARD_WIDTH = 10;
+        const BOARD_HEIGHT = 20;
+        let score = 0;
+        let level = 1;
+        let board = Array(BOARD_HEIGHT).fill().map(() => Array(BOARD_WIDTH).fill(0));
+        let currentPiece = null;
+        let gameInterval = null;
+
+        const PIECES = [
+            [[1, 1, 1, 1]], // I
+            [[1, 1], [1, 1]], // O
+            [[1, 1, 1], [0, 1, 0]], // T
+            [[1, 1, 1], [1, 0, 0]], // L
+            [[1, 1, 1], [0, 0, 1]], // J
+            [[1, 1, 0], [0, 1, 1]], // S
+            [[0, 1, 1], [1, 1, 0]]  // Z
+        ];
+
+        const COLORS = ['#00f0f0', '#f0f000', '#a000f0', '#f0a000', '#0000f0', '#00f000', '#f00000'];
+
+        function createPiece() {
+            const pieceIdx = Math.floor(Math.random() * PIECES.length);
+            return {
+                shape: PIECES[pieceIdx],
+                color: COLORS[pieceIdx],
+                x: Math.floor(BOARD_WIDTH / 2) - Math.floor(PIECES[pieceIdx][0].length / 2),
+                y: 0
+            };
+        }
+
+        function drawBoard() {
+            ctx.fillStyle = '#222';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            for (let y = 0; y < BOARD_HEIGHT; y++) {
+                for (let x = 0; x < BOARD_WIDTH; x++) {
+                    if (board[y][x]) {
+                        ctx.fillStyle = board[y][x];
+                        ctx.fillRect(x * BLOCK_SIZE, y * BLOCK_SIZE, BLOCK_SIZE - 1, BLOCK_SIZE - 1);
+                    }
+                }
+            }
+
+            if (currentPiece) {
+                ctx.fillStyle = currentPiece.color;
+                currentPiece.shape.forEach((row, y) => {
+                    row.forEach((value, x) => {
+                        if (value) {
+                            ctx.fillRect(
+                                (currentPiece.x + x) * BLOCK_SIZE,
+                                (currentPiece.y + y) * BLOCK_SIZE,
+                                BLOCK_SIZE - 1,
+                                BLOCK_SIZE - 1
+                            );
+                        }
+                    });
+                });
+            }
+        }
+
+        function collision() {
+            return currentPiece.shape.some((row, y) => {
+                return row.some((value, x) => {
+                    if (!value) return false;
+                    const newX = currentPiece.x + x;
+                    const newY = currentPiece.y + y;
+                    return newX < 0 || newX >= BOARD_WIDTH || newY >= BOARD_HEIGHT || board[newY][newX];
+                });
+            });
+        }
+
+        function merge() {
+            currentPiece.shape.forEach((row, y) => {
+                row.forEach((value, x) => {
+                    if (value) {
+                        board[currentPiece.y + y][currentPiece.x + x] = currentPiece.color;
+                    }
+                });
+            });
+        }
+
+        // 효과음 재생 함수 추가
+        function playSound(soundId) {
+            const sound = document.getElementById(soundId);
+            sound.currentTime = 0; // 소리를 처음부터 재생
+            sound.play();
+        }
+
+        function clearLines() {
+            let linesCleared = 0;
+            let linesToClear = [];
+
+            for (let y = BOARD_HEIGHT - 1; y >= 0; y--) {
+                if (board[y].every(value => value)) {
+                    linesToClear.push(y);
+                    linesCleared++;
+                }
+            }
+
+            if (linesCleared > 0) {
+                // 라인이 지워질 때 효과음 재생
+                playSound('clearSound');
+                
+                linesToClear.forEach(y => {
+                    const tempCanvas = document.createElement('canvas');
+                    tempCanvas.width = BLOCK_SIZE * BOARD_WIDTH;
+                    tempCanvas.height = BLOCK_SIZE;
+                    tempCanvas.style.position = 'absolute';
+                    tempCanvas.style.left = canvas.offsetLeft + 'px';
+                    tempCanvas.style.top = (canvas.offsetTop + y * BLOCK_SIZE) + 'px';
+                    tempCanvas.classList.add('flash-line');
+
+                    const tempCtx = tempCanvas.getContext('2d');
+                    for (let x = 0; x < BOARD_WIDTH; x++) {
+                        tempCtx.fillStyle = board[y][x];
+                        tempCtx.fillRect(x * BLOCK_SIZE, 0, BLOCK_SIZE - 1, BLOCK_SIZE - 1);
+                    }
+
+                    document.body.appendChild(tempCanvas);
+
+                    setTimeout(() => {
+                        tempCanvas.remove();
+                    }, 900);
+                });
+
+                setTimeout(() => {
+                    linesToClear.forEach(y => {
+                        board.splice(y, 1);
+                        board.unshift(Array(BOARD_WIDTH).fill(0));
+                    });
+
+                    score += linesCleared * 100 * level;
+                    document.getElementById('score').textContent = score;
+                    
+                    if (score >= level * 1000) {
+                        level++;
+                        document.getElementById('level').textContent = level;
+                        clearInterval(gameInterval);
+                        gameInterval = setInterval(update, 1000 / level);
+                    }
+                    
+                    drawBoard();
+                }, 900);
+            }
+        }
+
+        function rotate() {
+            const rotated = currentPiece.shape[0].map((_, i) =>
+                currentPiece.shape.map(row => row[row.length - 1 - i])
+            );
+            const previousShape = currentPiece.shape;
+            currentPiece.shape = rotated;
+            if (collision()) {
+                currentPiece.shape = previousShape;
+            }
+        }
+
+        function update() {
+            currentPiece.y++;
+            if (collision()) {
+                currentPiece.y--;
+                merge();
+                clearLines();
+                currentPiece = createPiece();
+                if (collision()) {
+                    gameOver();
+                }
+            }
+            drawBoard();
+        }
+
+        function gameOver() {
+            clearInterval(gameInterval);
+            document.getElementById('game-over').style.display = 'block';
+            // 게임 오버 효과음 재생
+            playSound('gameOverSound');
+        }
+
+        function startGame() {
+            board = Array(BOARD_HEIGHT).fill().map(() => Array(BOARD_WIDTH).fill(0));
+            score = 0;
+            level = 1;
+            document.getElementById('score').textContent = score;
+            document.getElementById('level').textContent = level;
+            document.getElementById('game-over').style.display = 'none';
+            currentPiece = createPiece();
+            if (gameInterval) clearInterval(gameInterval);
+            gameInterval = setInterval(update, 1000);
+            drawBoard();
+        }
+
+        document.addEventListener('keydown', event => {
+            if (!currentPiece) return;
+
+            switch (event.keyCode) {
+                case 37: // 왼쪽
+                    currentPiece.x--;
+                    if (collision()) currentPiece.x++;
+                    break;
+                case 39: // 오른쪽
+                    currentPiece.x++;
+                    if (collision()) currentPiece.x--;
+                    break;
+                case 40: // 아래
+                    currentPiece.y++;
+                    if (collision()) {
+                        currentPiece.y--;
+                        merge();
+                        clearLines();
+                        currentPiece = createPiece();
+                        if (collision()) gameOver();
+                    }
+                    break;
+                case 38: // 위 (회전)
+                    rotate();
+                    break;
+            }
+            drawBoard();
+        });
+    </script>
+</body>
+</html>
